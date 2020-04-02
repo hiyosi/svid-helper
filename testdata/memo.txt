@@ -1,0 +1,31 @@
+Prepare fixtures
+
+$ CAROOT=testdata/ mkcert install
+
+$ CAROOT=testdata/ mkcert \
+  -ecdsa \
+  -cert-file=./test-cert.pem \
+  --key-file=./test-key.pem \
+  example.com "*.example.com" example.test localhost 127.0.0.1
+
+$ openssl x509 \
+  -inform PEM \
+  -outform DER \
+  -text \
+  -in rootCA.pem \
+  -out rootCA.der
+
+$ openssl x509 \
+  -inform PEM \
+  -outform DER \
+  -text \
+  -in test-cert.pem \
+  -out test-cert.der
+
+$ openssl pkcs8 \
+  -topk8 \
+  -inform PEM \
+  -outform DER \
+  -nocrypt \
+  -in test-key.pem \
+  -out test-key.der
