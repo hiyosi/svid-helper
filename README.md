@@ -16,7 +16,7 @@ Usage of :
 
 ## Architecture
 
-pod-svid-helper has 2 different behavior that can be specified by `--mode` flag.  
+pod-svid-helper has 2 different behavior that can be specified by `--mode` flag.
 
 ### 'init' mode
 
@@ -25,13 +25,51 @@ If the helper fails to fetch the SVID, the helper exits with error.
 
 'init' mode helper should run as initContainer.
 
+e.g.,
+```yaml
+      initContainers:
+      - name: init-svid
+        args:
+        - --mode=init
+        - --workload-api-socket=/var/run/spire/agent.sock
+        - --pod-spiffe-id=spiffe://example.org/workload/my-pod
+        - --svid-path=/var/run/secret
+        image: hiyosi/pod-svid-helper:latest
+        imagePullPolicy: Always
+        volumeMounts:
+        - name: spire-agent-socket
+          mountPath: /var/run/spire
+          readOnly: false
+        - name: svid-dir
+          mountPath: /var/run/secret
+```
+
 ### 'refresh' mode
 
 The helper watches update of SVID.
 When the SVID is rotated, the helper receives the update and updates the SVID file with its contents.
-If the helper fails to update the SVID, the helper only outputs the logs. this means refresh mode helper don't exit when an error occur, continue to watch the update. 
+If the helper fails to update the SVID, the helper only outputs the logs. this means 'refresh' mode helper doesn't exit when an error occur, continue to watch the update. 
 
 'refresh' mode helper should run as sidecar container.
+
+e.g.,
+```yaml
+      containers:
+      - name: refresh-svid
+        args:
+        - --mode=refresh
+        - --workload-api-socket=/var/run/spire/agent.sock
+        - --pod-spiffe-id=spiffe://example.org/workload/my-pod
+        - --svid-path=/var/run/secret
+        image: hiyosi/pod-svid-helper:latest
+        imagePullPolicy: Always
+        volumeMounts:
+        - name: spire-agent-socket
+          mountPath: /var/run/spire
+          readOnly: false
+        - name: svid-dir
+          mountPath: /var/run/secret
+```
 
 ## example
 
