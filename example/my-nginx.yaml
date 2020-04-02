@@ -25,7 +25,7 @@ spec:
         - --workload-api-socket=/var/run/spire/agent.sock
         - --pod-spiffe-id=spiffe://example.org/workload/nginx
         - --svid-path=/var/run/secret/nginx
-        image: hiyosi/pod-svid-helper:experimental
+        image: hiyosi/pod-svid-helper:latest
         imagePullPolicy: Always
         volumeMounts:
         - name: spire-agent-socket
@@ -47,7 +47,7 @@ spec:
         - --workload-api-socket=/var/run/spire/agent.sock
         - --pod-spiffe-id=spiffe://example.org/workload/nginx
         - --svid-path=/var/run/secret/nginx
-        image: hiyosi/pod-svid-helper:experimental
+        image: hiyosi/pod-svid-helper:latest
         imagePullPolicy: Always
         volumeMounts:
         - name: spire-agent-socket
