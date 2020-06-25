@@ -6,7 +6,7 @@ $ CAROOT=testdata/ mkcert \
   -ecdsa \
   -cert-file=./test-cert.pem \
   --key-file=./test-key.pem \
-  example.com "*.example.com" example.test localhost 127.0.0.1
+  example.com "*.example.com" example.test localhost 127.0.0.1 spiffe://example.org/test/0
 
 $ openssl x509 \
   -inform PEM \

@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/spiffe/go-spiffe/v2/spiffeid"
+
 	"github.com/spf13/pflag"
 	"go.uber.org/zap"
 
@@ -50,9 +52,27 @@ func main() {
 	}
 	defer logger.Sync()
 
-	helper := svid_helper.New(logger, *mode, *wlAPISocket, *svidPath, *podSPIFFEID)
-
-	if err := helper.Run(); err != nil {
-		logger.Error(err)
+	podID, err := spiffeid.FromString(*podSPIFFEID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, err.Error())
+		os.Exit(1)
 	}
+	helper := svid_helper.New(logger, *wlAPISocket, *svidPath, podID)
+
+	m := svid_helper.NewMode(*mode)
+	switch m {
+	case svid_helper.Init:
+		logger.Debug("run init mode")
+		err := helper.RunModeInit()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Initialize SVID error: %v", err.Error())
+		}
+	case svid_helper.Refresh:
+		logger.Debug("run refresh mode")
+		helper.RunModeRefresh()
+	default:
+		fmt.Fprintf(os.Stderr, "Unkown mode: %v", m)
+		os.Exit(1)
+	}
+
 }
