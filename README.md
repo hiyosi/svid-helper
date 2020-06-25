@@ -81,14 +81,15 @@ $ kind create cluster --image kindest/node:v1.17.2 --name spire-test --config ex
 - Deploy SPIRE Server and Agent  
 ```
 $ git clone https://github.com/spiffe/spire-examples.git
-$ cd spire-examples/examples/k8s/simple_psat
-$ kubectl apply -f spire-server.yaml
-$ kubectl apply -f spire-agent.yaml
+$ kubectl apply -f spire-examples/examples/k8s/simple_psat/spire-server.yaml
+$ kubectl apply -f spire-examples/examples/k8s/simple_psat/spire-agent.yaml
 ```
 
 - Create Registration Entry
 
 ```
+$ kubectl exec -it -n spire spire-server 0 sh
+
 # bin/spire-server entry create \ 
   -registrationUDSPath /tmp/spire-registration.sock \ 
   -spiffeID spiffe://example.org/k8s/node/worker \ 

@@ -4,23 +4,20 @@ import (
 	"context"
 	"fmt"
 	"io/ioutil"
-	"net"
-	"os"
-	"os/signal"
 	"path/filepath"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
-	workload_proto "github.com/spiffe/go-spiffe/proto/spiffe/workload"
-	"github.com/spiffe/go-spiffe/workload"
-	workload_dial "github.com/spiffe/spire/api/workload/dial"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
+	"github.com/spiffe/go-spiffe/v2/bundle/x509bundle"
+	"github.com/spiffe/go-spiffe/v2/spiffeid"
+	"github.com/spiffe/go-spiffe/v2/svid/x509svid"
+	"github.com/spiffe/go-spiffe/v2/workloadapi"
 	"github.com/spiffe/spire/pkg/common/pemutil"
 	"go.uber.org/zap"
-
-	workload_util "github.com/hiyosi/pod-svid-helper/pkg/util/spire/api/workload"
-	x509_util "github.com/hiyosi/pod-svid-helper/pkg/util/x509"
 )
 
 var (
@@ -66,190 +63,183 @@ type Artifact struct {
 // SVIDHelper also implements workload.SVIDWatcher
 type SVIDHelper struct {
 	Logger          *zap.SugaredLogger
-	Mode            string
 	WorkloadAPIPath string
 	SVIDPath        string
-	PodSPFFEID      string
+	PodSPFFEID      spiffeid.ID
 
-	fetchX509SVIDHandler  func(context.Context, time.Duration, string) (*workload_proto.X509SVIDResponse, error)
+	fetchX509SVIDHandler  func(context.Context, time.Duration) (*x509svid.SVID, *x509bundle.Bundle, error)
 	checkSVIDExistHandler func(path string) error
 }
 
 // New returns new *SVIDHelper with given values.
-func New(logger *zap.SugaredLogger, mode string, wlAPIPath, svidPath, podSPIFFEID string) *SVIDHelper {
-	return &SVIDHelper{
+func New(logger *zap.SugaredLogger, wlAPIPath, svidPath string, podSPIFFEID spiffeid.ID) *SVIDHelper {
+	h := &SVIDHelper{
 		Logger:                logger,
-		Mode:                  mode,
 		WorkloadAPIPath:       wlAPIPath,
 		SVIDPath:              svidPath,
 		PodSPFFEID:            podSPIFFEID,
-		fetchX509SVIDHandler:  fetchX509SVID,
 		checkSVIDExistHandler: checkSVIDFileExist,
 	}
+	h.fetchX509SVIDHandler = h.fetchX509SVID
+	return h
+}
+
+// runModeInit fetch X509SVIDs and output them to given path(sh.SVIDPath)
+func (sh *SVIDHelper) RunModeInit() error {
+	if err := sh.checkSVIDExistHandler(sh.SVIDPath); err != nil {
+		return err
+	}
+
+	ctx := context.Background()
+	svid, bundle, err := sh.fetchX509SVIDHandler(ctx, defaultTimeOut)
+	if err != nil {
+		return fmt.Errorf("unable to fetch SVID: %v", err)
+	}
+
+	pemSVID := pemutil.EncodeCertificates(svid.Certificates)
+	pemKey, err := pemutil.EncodePKCS8PrivateKey(svid.PrivateKey)
+	if err != nil {
+		return fmt.Errorf("failed to parse Private Key for (%v): %v", svid.ID.String(), err)
+	}
+
+	pemBundle := pemutil.EncodeCertificates(bundle.X509Authorities())
+	if err != nil {
+		return fmt.Errorf("failed to parse Bundle for (%v): %v", svid.ID.TrustDomain(), err)
+	}
+
+	artifact := &Artifact{
+		SVID:       pemSVID,
+		PrivateKey: pemKey,
+		Bundle:     pemBundle,
+	}
+
+	if err := writeResponse(artifact, sh.SVIDPath); err != nil {
+		return fmt.Errorf("failed to ouput response: %v", err)
+	}
+
+	sh.Logger.Info("Init SVID is successfully")
+	return nil
+}
+
+// runModeRefresh rotates SVIDs if they are renewed
+func (sh *SVIDHelper) RunModeRefresh() {
+	ctx := context.Background()
+	sh.watchX509SVID(ctx)
+}
+
+func (sh *SVIDHelper) svidPicker(svids []*x509svid.SVID) *x509svid.SVID {
+	for _, svid := range svids {
+		if svid.ID == sh.PodSPFFEID {
+			sh.Logger.Debugf("SVID fetched for SPIFFE ID: %q", svid.ID.String())
+			return svid
+		}
+	}
+	return nil
+}
+
+// fetchX509SVID fetches X509SVID from Workload API.
+func (sh *SVIDHelper) fetchX509SVID(ctx context.Context, timeout time.Duration) (*x509svid.SVID, *x509bundle.Bundle, error) {
+	if timeout > 0 {
+		var cancel func()
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
+
+	source, err := workloadapi.NewX509Source(ctx,
+		workloadapi.WithClientOptions(workloadapi.WithLogger(sh.Logger), workloadapi.WithAddr(sh.WorkloadAPIPath)),
+		workloadapi.WithDefaultX509SVIDPicker(sh.svidPicker))
+	if err != nil {
+		return nil, nil, fmt.Errorf("unable to prepare workload api client: %v", err)
+	}
+	defer source.Close()
+
+	bundle, err := source.GetX509BundleForTrustDomain(sh.PodSPFFEID.TrustDomain())
+	if err != nil {
+		return nil, nil, fmt.Errorf("unable to fetch x509 bundle: %v", err)
+	}
+	svid, err := source.GetX509SVID()
+	if err != nil {
+		return nil, nil, fmt.Errorf("unable to fetch x509 svid: %v", err)
+	}
+
+	return svid, bundle, nil
+}
+
+func (sh *SVIDHelper) watchX509SVID(ctx context.Context) {
+	var wg sync.WaitGroup
+
+	client, err := workloadapi.New(ctx,
+		workloadapi.WithLogger(sh.Logger),
+		workloadapi.WithAddr(sh.WorkloadAPIPath),
+	)
+	if err != nil {
+		sh.Logger.Errorf("Failed to prepare workload client: %v", err)
+	}
+	defer client.Close()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		err := client.WatchX509Context(ctx, &x509Watcher{
+			logger:       sh.Logger,
+			mustSPIFFEID: sh.PodSPFFEID,
+			svidPath:     sh.SVIDPath,
+		})
+		if err != nil && status.Code(err) != codes.Canceled {
+			sh.Logger.Errorf("Error watching X.509 context: %v", err)
+		}
+	}()
+
+	wg.Wait()
+}
+
+type x509Watcher struct {
+	logger       *zap.SugaredLogger
+	mustSPIFFEID spiffeid.ID
+	svidPath     string
 }
 
 // UpdateX509SVIDs is run every time an SVID is updated
-func (sh *SVIDHelper) UpdateX509SVIDs(svids *workload.X509SVIDs) {
-	for _, svid := range svids.SVIDs {
-		if svid.SPIFFEID != sh.PodSPFFEID {
+func (w *x509Watcher) OnX509ContextUpdate(c *workloadapi.X509Context) {
+	for _, svid := range c.SVIDs {
+		if svid.ID != w.mustSPIFFEID {
 			continue
 		}
 
 		pemSVID := pemutil.EncodeCertificates(svid.Certificates)
 		pemPrivateKey, err := pemutil.EncodePKCS8PrivateKey(svid.PrivateKey)
 		if err != nil {
-			sh.Logger.Error("Failed to prepare the new SVID for %v: %v", svid.SPIFFEID, err)
+			w.logger.Errorf("Failed to encode private-key %v: %v", svid.ID.String(), err)
 			continue
 		}
-		pemBundle := pemutil.EncodeCertificates(svid.TrustBundle)
+		bundles, err := c.Bundles.GetX509BundleForTrustDomain(svid.ID.TrustDomain())
+		if err != nil {
+			w.logger.Errorf("Failed to get trust-bundle for %v: %v", svid.ID.TrustDomain(), err)
+			continue
+		}
+		pemBundles := pemutil.EncodeCertificates(bundles.X509Authorities())
 
 		artifact := &Artifact{
 			SVID:       pemSVID,
 			PrivateKey: pemPrivateKey,
-			Bundle:     pemBundle,
+			Bundle:     pemBundles,
 		}
 
-		if err := writeResponse(artifact, sh.SVIDPath); err != nil {
-			sh.Logger.Error("Failed to rotate the SVID for %v: %v", svid.SPIFFEID, err)
+		if err := writeResponse(artifact, w.svidPath); err != nil {
+			w.logger.Errorf("Failed to rotate the new SVID for %v: %v", svid.ID.String(), err)
 			continue
 		}
 
-		sh.Logger.Infof("SVID updated for spiffeID: %q", svid.SPIFFEID)
+		w.logger.Infof("SVID updated for spiffeID: %q", svid.ID.String())
 		return
 	}
 }
 
-// OnError is run when the client runs into an error
-func (sh *SVIDHelper) OnError(err error) {
-	sh.Logger.Infof("X509SVIDClient error: %v", err)
-}
-
-// runModeInit fetch X509SVIDs and output them to given path(sh.SVIDPath)
-func (sh *SVIDHelper) runModeInit() error {
-	ctx := context.Background()
-	resp, err := sh.fetchX509SVIDHandler(ctx, defaultTimeOut, sh.WorkloadAPIPath)
-	if err != nil {
-		return fmt.Errorf("unable to fetch SVID: %v", err)
+// OnX509ContextWatchError is run when the client runs into an error
+func (w *x509Watcher) OnX509ContextWatchError(err error) {
+	if status.Code(err) != codes.Canceled {
+		w.logger.Errorf("Watch X.509 SVID error: %v", err)
 	}
-
-	if err := sh.checkSVIDExistHandler(sh.SVIDPath); err != nil {
-		return err
-	}
-
-	for _, svid := range resp.Svids {
-		spiffeID := svid.GetSpiffeId()
-		sh.Logger.Debugf("spiffeID=%v, pod-spiffe-id=%v", spiffeID, sh.PodSPFFEID)
-		if spiffeID != sh.PodSPFFEID {
-			continue
-		}
-
-		sh.Logger.Infof("SVID fetched for SPIFFE ID: %q", spiffeID)
-
-		pemSVID, err := x509_util.ConvertCertificateDERToPEM(svid.GetX509Svid())
-		if err != nil {
-			return fmt.Errorf("failed to parse SVID for (%v): %v", spiffeID, err)
-		}
-		pemKey, err := x509_util.ConvertPrivateKeyDERToPEM(svid.GetX509SvidKey())
-		if err != nil {
-			return fmt.Errorf("failed to parse Private Key for (%v): %v", spiffeID, err)
-		}
-		pemBundle, err := x509_util.ConvertCertificateDERToPEM(svid.GetBundle())
-		if err != nil {
-			return fmt.Errorf("failed to parse Bundle for (%v): %v", spiffeID, err)
-		}
-
-		artifact := &Artifact{
-			SVID:       pemSVID,
-			PrivateKey: pemKey,
-			Bundle:     pemBundle,
-		}
-
-		if err := writeResponse(artifact, sh.SVIDPath); err != nil {
-			return fmt.Errorf("failed to ouput response: %v", err)
-		}
-
-		sh.Logger.Info("Init SVID is successfully")
-	}
-	return nil
-}
-
-// runModeRefresh rotates SVIDs if they are renewed
-func (sh *SVIDHelper) runModeRefresh() error {
-	x509SVIDClient, err := workload.NewX509SVIDClient(sh, workload.WithAddr(fmt.Sprintf("unix://%v", sh.WorkloadAPIPath)))
-	if err != nil {
-		return fmt.Errorf("unable to create x509SVIDClient: %v", err)
-	}
-
-	if err := x509SVIDClient.Start(); err != nil {
-		return fmt.Errorf("unable to start x509SVIDClient: %v", err)
-	}
-
-	waitShutdown()
-
-	if err := x509SVIDClient.Stop(); err != nil {
-		return fmt.Errorf("unable to properly stop x509SVIDClient: %v", err)
-	}
-
-	return nil
-}
-
-// Run runs SVIDHelper as given mode(sh.Mode)
-func (sh *SVIDHelper) Run() error {
-	mode := NewMode(sh.Mode)
-	switch mode {
-	case Init:
-		sh.Logger.Debug("Run init mode")
-		return sh.runModeInit()
-	case Refresh:
-		sh.Logger.Debug("Run refresh mode")
-		return sh.runModeRefresh()
-	default:
-		return fmt.Errorf("unkown mode: %v", sh.Mode)
-	}
-}
-
-// waitShutdown waits until an os.Interrupt signal is sent (ctrl + c)
-func waitShutdown() {
-	var wg sync.WaitGroup
-	wg.Add(1)
-
-	var signalCh chan os.Signal
-	signalCh = make(chan os.Signal, 1)
-	signal.Notify(signalCh, syscall.SIGINT, syscall.SIGTERM)
-
-	go func() {
-		<-signalCh
-		wg.Done()
-	}()
-
-	wg.Wait()
-}
-
-// fetchX509SVID fetches X509SVID from Workload API.
-func fetchX509SVID(ctx context.Context, timeout time.Duration, apiPath string) (*workload_proto.X509SVIDResponse, error) {
-	conn, err := workload_dial.Dial(ctx, &net.UnixAddr{
-		Name: apiPath,
-		Net:  "unix",
-	})
-	if err != nil {
-		return nil, fmt.Errorf("unable to connect to API via %v: %v", apiPath, err)
-	}
-	client := workload_proto.NewSpiffeWorkloadAPIClient(conn)
-
-	ctx, cancel := workload_util.PrepareAPIContext(ctx, timeout)
-	defer cancel()
-
-	stream, err := client.FetchX509SVID(ctx, &workload_proto.X509SVIDRequest{})
-	if err != nil {
-		return nil, fmt.Errorf("failed to create stream: %v", err)
-	}
-
-	resp, err := stream.Recv()
-	if err != nil {
-		return nil, fmt.Errorf("unable to receive SVID from stream: %v", err)
-	}
-
-	return resp, nil
 }
 
 func checkSVIDFileExist(path string) error {

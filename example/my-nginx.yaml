@@ -22,7 +22,7 @@ spec:
       - name: init-svid
         args:
         - --mode=init
-        - --workload-api-socket=/var/run/spire/agent.sock
+        - --workload-api-socket=unix:///var/run/spire/agent.sock
         - --pod-spiffe-id=spiffe://example.org/workload/nginx
         - --svid-path=/var/run/secret/nginx
         image: hiyosi/pod-svid-helper:latest
@@ -32,7 +32,7 @@ spec:
           mountPath: /var/run/spire
           readOnly: false
         - name: svid-dir
-          mountPath: /var/run/secret/nginx
+          mountPath: /var/run/secrets/nginx
       containers:
       - name: nginx
         image: nginx:1.17.9
@@ -40,11 +40,11 @@ spec:
         - containerPort: 80
         volumeMounts:
         - name: svid-dir
-          mountPath: /var/run/secret/nginx
+          mountPath: /var/run/secrets/nginx
       - name: refresh-svid
         args:
         - --mode=refresh
-        - --workload-api-socket=/var/run/spire/agent.sock
+        - --workload-api-socket=unix:///var/run/spire/agent.sock
         - --pod-spiffe-id=spiffe://example.org/workload/nginx
         - --svid-path=/var/run/secret/nginx
         image: hiyosi/pod-svid-helper:latest
@@ -54,7 +54,7 @@ spec:
           mountPath: /var/run/spire
           readOnly: false
         - name: svid-dir
-          mountPath: /var/run/secret/nginx
+          mountPath: /var/run/secrets/nginx
       volumes:
         - emptyDir: {}
           name: svid-dir

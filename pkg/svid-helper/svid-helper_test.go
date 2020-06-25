@@ -2,7 +2,6 @@ package svid_helper
 
 import (
 	"context"
-	"crypto"
 	"errors"
 	"io/ioutil"
 	"os"
@@ -11,9 +10,11 @@ import (
 	"testing"
 	"time"
 
-	workload_proto "github.com/spiffe/go-spiffe/proto/spiffe/workload"
-	"github.com/spiffe/go-spiffe/workload"
-	"github.com/spiffe/spire/pkg/common/pemutil"
+	"github.com/spiffe/go-spiffe/v2/workloadapi"
+
+	"github.com/spiffe/go-spiffe/v2/bundle/x509bundle"
+	"github.com/spiffe/go-spiffe/v2/spiffeid"
+	"github.com/spiffe/go-spiffe/v2/svid/x509svid"
 	"go.uber.org/zap"
 )
 
@@ -66,71 +67,52 @@ func TestNewMode(t *testing.T) {
 	}
 }
 
-func TestUpdateX509SVIDs(t *testing.T) {
-	bundles, err := pemutil.LoadCertificates(testBundle)
+func TestOnX509ContextUpdate(t *testing.T) {
+	svid, err := x509svid.Load(testCert, testKey)
 	if err != nil {
 		t.Errorf("Unexpected erorr: failed to prepare testing: %v", err)
 	}
-	certificates, err := pemutil.LoadCertificates(testCert)
+	trustBundle, err := spiffeid.TrustDomainFromString("spiffe://example.org")
 	if err != nil {
 		t.Errorf("Unexpected erorr: failed to prepare testing: %v", err)
 	}
-	privateKey, err := pemutil.LoadPrivateKey(testKey)
+	bundles, err := x509bundle.Load(trustBundle, testBundle)
 	if err != nil {
 		t.Errorf("Unexpected erorr: failed to prepare testing: %v", err)
-	}
-
-	sh := &SVIDHelper{
-		Logger: testLogger(),
 	}
 
 	tCases := []struct {
 		podID             string
-		svids             *workload.X509SVIDs
+		svids             *workloadapi.X509Context
 		expectOutputFiles bool
 	}{
 		// 0. complete svids
 		{
 			podID: "spiffe://example.org/test/0",
-			svids: &workload.X509SVIDs{
-				SVIDs: []*workload.X509SVID{
-					{
-						SPIFFEID:     "spiffe://example.org/test/0",
-						PrivateKey:   privateKey.(crypto.Signer),
-						Certificates: certificates,
-						TrustBundle:  bundles,
+			svids: &workloadapi.X509Context{
+				SVIDs: []*x509svid.SVID{
+					&x509svid.SVID{
+						ID:           spiffeid.RequireFromString("spiffe://example.org/test/0"),
+						Certificates: svid.Certificates,
+						PrivateKey:   svid.PrivateKey,
 					},
 				},
+				Bundles: x509bundle.NewSet(bundles),
 			},
 			expectOutputFiles: true,
 		},
-		// 1. invalid private key data
+		// 1. expected Pod SPIFFE ID isn't included
 		{
 			podID: "spiffe://example.org/test/1",
-			svids: &workload.X509SVIDs{
-				SVIDs: []*workload.X509SVID{
-					{
-						SPIFFEID:     "spiffe://example.org/test/0",
-						PrivateKey:   privateKey.(crypto.Signer),
-						Certificates: certificates,
-						TrustBundle:  bundles,
+			svids: &workloadapi.X509Context{
+				SVIDs: []*x509svid.SVID{
+					&x509svid.SVID{
+						ID:           spiffeid.RequireFromString("spiffe://example.org/foo/bar"),
+						Certificates: svid.Certificates,
+						PrivateKey:   svid.PrivateKey,
 					},
 				},
-			},
-			expectOutputFiles: false,
-		},
-		// 2. expected Pod SPIFFE ID isn't included
-		{
-			podID: "spiffe://example.org/test/1",
-			svids: &workload.X509SVIDs{
-				SVIDs: []*workload.X509SVID{
-					{
-						SPIFFEID:     "spiffe://example.org/test/foo",
-						PrivateKey:   privateKey.(crypto.Signer),
-						Certificates: certificates,
-						TrustBundle:  bundles,
-					},
-				},
+				Bundles: x509bundle.NewSet(bundles),
 			},
 			expectOutputFiles: false,
 		},
@@ -141,10 +123,12 @@ func TestUpdateX509SVIDs(t *testing.T) {
 		if err != nil {
 			t.Errorf("#%v: Unexpected error: %v", i, err)
 		}
-		sh.SVIDPath = svidPath
-		sh.PodSPFFEID = tc.podID
-
-		sh.UpdateX509SVIDs(tc.svids)
+		watcher := &x509Watcher{
+			logger:       testLogger(),
+			mustSPIFFEID: spiffeid.RequireFromString(tc.podID),
+			svidPath:     svidPath,
+		}
+		watcher.OnX509ContextUpdate(tc.svids)
 
 		if tc.expectOutputFiles {
 			if !fileExists(filepath.Join(svidPath, "svid.pem")) ||
@@ -163,15 +147,16 @@ func TestUpdateX509SVIDs(t *testing.T) {
 }
 
 func TestRunModeInit(t *testing.T) {
-	bundles, err := ioutil.ReadFile(testBundleDER)
+	svid, err := x509svid.Load(testCert, testKey)
 	if err != nil {
 		t.Errorf("Unexpected erorr: failed to prepare testing: %v", err)
 	}
-	certificates, err := ioutil.ReadFile(testCertDER)
+
+	trustBundle, err := spiffeid.TrustDomainFromString("spiffe://example.org")
 	if err != nil {
 		t.Errorf("Unexpected erorr: failed to prepare testing: %v", err)
 	}
-	privateKey, err := ioutil.ReadFile(testKeyDER)
+	bundles, err := x509bundle.Load(trustBundle, testBundle)
 	if err != nil {
 		t.Errorf("Unexpected erorr: failed to prepare testing: %v", err)
 	}
@@ -182,108 +167,49 @@ func TestRunModeInit(t *testing.T) {
 
 	tCases := []struct {
 		podID                 string
-		fetchX509SVIDHandler  func(context.Context, time.Duration, string) (*workload_proto.X509SVIDResponse, error)
+		fetchX509SVIDHandler  func(context.Context, time.Duration) (*x509svid.SVID, *x509bundle.Bundle, error)
 		checkSVIDExistHandler func(path string) error
 		wantErr               string
 	}{
 		// 0. fetchX509SVIDHandler returns complete response, and then the response is output as files
 		{
 			podID: "spiffe://example.org/test/0",
-			fetchX509SVIDHandler: func(context.Context, time.Duration, string) (*workload_proto.X509SVIDResponse, error) {
-				return &workload_proto.X509SVIDResponse{
-					Svids: []*workload_proto.X509SVID{
-						{
-							SpiffeId:    "spiffe://example.org/test/0",
-							X509Svid:    certificates,
-							X509SvidKey: privateKey,
-							Bundle:      bundles,
-						},
+			fetchX509SVIDHandler: func(context.Context, time.Duration) (*x509svid.SVID, *x509bundle.Bundle, error) {
+				return &x509svid.SVID{
+						ID:           spiffeid.RequireFromString("spiffe://example.org/test/0"),
+						Certificates: svid.Certificates,
+						PrivateKey:   svid.PrivateKey,
 					},
-				}, nil
+					bundles,
+					nil
 			},
 			checkSVIDExistHandler: checkSVIDFileExist,
 		},
 		// 1. fetchX509SVIDHandler returns error
 		{
 			podID: "spiffe://example.org/test/1",
-			fetchX509SVIDHandler: func(context.Context, time.Duration, string) (*workload_proto.X509SVIDResponse, error) {
-				return nil, errors.New("fake handler error")
+			fetchX509SVIDHandler: func(context.Context, time.Duration) (*x509svid.SVID, *x509bundle.Bundle, error) {
+				return nil, nil, errors.New("fake handler error")
 			},
-			wantErr: "unable to fetch SVID: fake handler error",
+			checkSVIDExistHandler: checkSVIDFileExist,
+			wantErr:               "unable to fetch SVID: fake handler error",
 		},
 		// 2. SVID already exists
 		{
 			podID: "spiffe://example.org/test/2",
-			fetchX509SVIDHandler: func(context.Context, time.Duration, string) (*workload_proto.X509SVIDResponse, error) {
-				return &workload_proto.X509SVIDResponse{
-					Svids: []*workload_proto.X509SVID{
-						{
-							SpiffeId:    "spiffe://example.org/test/2",
-							X509Svid:    certificates,
-							X509SvidKey: privateKey,
-							Bundle:      bundles,
-						},
+			fetchX509SVIDHandler: func(context.Context, time.Duration) (*x509svid.SVID, *x509bundle.Bundle, error) {
+				return &x509svid.SVID{
+						ID:           spiffeid.RequireFromString("spiffe://example.org/test/2"),
+						Certificates: svid.Certificates,
+						PrivateKey:   svid.PrivateKey,
 					},
-				}, nil
+					bundles,
+					nil
 			},
 			checkSVIDExistHandler: func(string) error {
 				return errors.New("fake exist error")
 			},
 			wantErr: "fake exist error",
-		},
-		// 3. fetchX509SVIDHandler returns invalid X509svid data
-		{
-			podID: "spiffe://example.org/test/3",
-			fetchX509SVIDHandler: func(context.Context, time.Duration, string) (*workload_proto.X509SVIDResponse, error) {
-				return &workload_proto.X509SVIDResponse{
-					Svids: []*workload_proto.X509SVID{
-						{
-							SpiffeId:    "spiffe://example.org/test/3",
-							X509Svid:    []byte("fake svid"),
-							X509SvidKey: privateKey,
-							Bundle:      bundles,
-						},
-					},
-				}, nil
-			},
-			checkSVIDExistHandler: checkSVIDFileExist,
-			wantErr:               "failed to parse SVID for (spiffe://example.org/test/3)",
-		},
-		// 4. fetchX509SVIDHandler returns invalid X509key data
-		{
-			podID: "spiffe://example.org/test/3",
-			fetchX509SVIDHandler: func(context.Context, time.Duration, string) (*workload_proto.X509SVIDResponse, error) {
-				return &workload_proto.X509SVIDResponse{
-					Svids: []*workload_proto.X509SVID{
-						{
-							SpiffeId:    "spiffe://example.org/test/3",
-							X509Svid:    certificates,
-							X509SvidKey: []byte("fake key"),
-							Bundle:      bundles,
-						},
-					},
-				}, nil
-			},
-			checkSVIDExistHandler: checkSVIDFileExist,
-			wantErr:               "failed to parse Private Key for (spiffe://example.org/test/3)",
-		},
-		// 5. fetchX509SVIDHandler returns invalid bundle data
-		{
-			podID: "spiffe://example.org/test/3",
-			fetchX509SVIDHandler: func(context.Context, time.Duration, string) (*workload_proto.X509SVIDResponse, error) {
-				return &workload_proto.X509SVIDResponse{
-					Svids: []*workload_proto.X509SVID{
-						{
-							SpiffeId:    "spiffe://example.org/test/3",
-							X509Svid:    certificates,
-							X509SvidKey: privateKey,
-							Bundle:      []byte("fake bundle"),
-						},
-					},
-				}, nil
-			},
-			checkSVIDExistHandler: checkSVIDFileExist,
-			wantErr:               "failed to parse Bundle for (spiffe://example.org/test/3)",
 		},
 	}
 
@@ -293,11 +219,14 @@ func TestRunModeInit(t *testing.T) {
 			t.Errorf("#%v: Unexpected error: %v", i, err)
 		}
 		sh.SVIDPath = svidPath
-		sh.PodSPFFEID = tc.podID
+		sh.PodSPFFEID, err = spiffeid.FromString(tc.podID)
+		if err != nil {
+			t.Errorf("#%v: Unexpected error: %v", i, err)
+		}
 		sh.fetchX509SVIDHandler = tc.fetchX509SVIDHandler
 		sh.checkSVIDExistHandler = tc.checkSVIDExistHandler
 
-		err = sh.runModeInit()
+		err = sh.RunModeInit()
 		if tc.wantErr != "" {
 			if !strings.HasPrefix(err.Error(), tc.wantErr) {
 				t.Errorf("#%v: expect error %v, got %v", i, tc.wantErr, err.Error())
