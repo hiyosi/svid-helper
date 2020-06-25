@@ -31,7 +31,7 @@ e.g.,
       - name: init-svid
         args:
         - --mode=init
-        - --workload-api-socket=/var/run/spire/agent.sock
+        - --workload-api-socket=unix:///var/run/spire/agent.sock
         - --pod-spiffe-id=spiffe://example.org/workload/my-pod
         - --svid-path=/var/run/secret
         image: hiyosi/pod-svid-helper:latest
@@ -58,7 +58,7 @@ e.g.,
       - name: refresh-svid
         args:
         - --mode=refresh
-        - --workload-api-socket=/var/run/spire/agent.sock
+        - --workload-api-socket=unix:///var/run/spire/agent.sock
         - --pod-spiffe-id=spiffe://example.org/workload/my-pod
         - --svid-path=/var/run/secret
         image: hiyosi/pod-svid-helper:latest
