@@ -1,4 +1,4 @@
-# pod-svid-manager
+# svid-helper
 
 If you want to treat the SVID as a file, this helper will help you to issue and rotate the SVID.
 The helper behaves as a Pod's Sidecar.
@@ -16,7 +16,7 @@ Usage of :
 
 ## Architecture
 
-pod-svid-helper has 2 different behavior that can be specified by `--mode` flag.
+svid-helper has 2 different behavior that can be specified by `--mode` flag.
 
 ### 'init' mode
 
