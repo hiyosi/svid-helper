@@ -4,9 +4,8 @@ go 1.14
 
 require (
 	github.com/spf13/pflag v1.0.5
-	github.com/spiffe/go-spiffe v1.0.0
-	github.com/spiffe/go-spiffe/v2 v2.0.0-alpha.4
-	github.com/spiffe/spire v0.10.0
+	github.com/spiffe/go-spiffe/v2 v2.0.0-beta.6
+	github.com/spiffe/spire v1.0.3
 	go.uber.org/zap v1.14.1
-	google.golang.org/grpc v1.27.1
+	google.golang.org/grpc v1.36.1
 )
