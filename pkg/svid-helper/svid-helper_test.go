@@ -3,7 +3,6 @@ package svid_helper
 import (
 	"context"
 	"errors"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strings"
@@ -119,7 +118,7 @@ func TestOnX509ContextUpdate(t *testing.T) {
 	}
 
 	for i, tc := range tCases {
-		svidPath, err := ioutil.TempDir("", "pod-svid-helper")
+		svidPath, err := os.MkdirTemp("", "pod-svid-helper")
 		if err != nil {
 			t.Errorf("#%v: Unexpected error: %v", i, err)
 		}
@@ -214,7 +213,7 @@ func TestRunModeInit(t *testing.T) {
 	}
 
 	for i, tc := range tCases {
-		svidPath, err := ioutil.TempDir("", "pod-svid-helper")
+		svidPath, err := os.MkdirTemp("", "pod-svid-helper")
 		if err != nil {
 			t.Errorf("#%v: Unexpected error: %v", i, err)
 		}
@@ -242,13 +241,13 @@ func TestRunModeInit(t *testing.T) {
 }
 
 func TestCheckSVIDFileExist(t *testing.T) {
-	svidPath, err := ioutil.TempDir("", "pod-svid-helper")
+	svidPath, err := os.MkdirTemp("", "pod-svid-helper")
 	if err != nil {
 		t.Errorf("Unexpected error: %v", err)
 	}
 
 	svidFileName := filepath.Join(svidPath, "svid.pem")
-	if err := ioutil.WriteFile(svidFileName, []byte("test-data"), 0644); err != nil {
+	if err := os.WriteFile(svidFileName, []byte("test-data"), 0644); err != nil {
 		t.Errorf("Unexpected error: %v", err)
 	}
 

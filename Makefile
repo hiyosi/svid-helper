@@ -1,7 +1,7 @@
 out_dir := out/bin
 
 build:
-	cd cmd && GOOS=linux GOARCH=amd64 go build -o ../$(out_dir)/pod-svid-helper  -i
+	cd cmd && GOOS=linux GOARCH=amd64 go build -o ../$(out_dir)/pod-svid-helper
 
 build-docker: build
 	docker build -t hiyosi/pod-svid-helper .
@@ -15,7 +15,7 @@ docker-push: build
 	docker push hiyosi/pod-svid-helper:latest
 
 docker-push-tag: build
-	dockr build -t hiyosi/pod-svid-helper:$TAG .
+	docker build -t hiyosi/pod-svid-helper:$TAG .
 	docker push hiyosi/pod-svid-helper:$TAG
 
 test: vet
