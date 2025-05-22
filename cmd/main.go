@@ -10,8 +10,8 @@ import (
 	"github.com/spf13/pflag"
 	"go.uber.org/zap"
 
-	svid_helper "github.com/hiyosi/pod-svid-helper/pkg/svid-helper"
-	flag_util "github.com/hiyosi/pod-svid-helper/pkg/util/flag"
+	svid_helper "github.com/hiyosi/svid-helper/pkg/svid-helper"
+	flag_util "github.com/hiyosi/svid-helper/pkg/util/flag"
 )
 
 var (
@@ -47,14 +47,14 @@ func main() {
 
 	logger, err := newSugaredLogger(*logLevel)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, err.Error())
+		fmt.Fprintf(os.Stderr, "%s", err.Error())
 		os.Exit(1)
 	}
 	defer logger.Sync()
 
 	podID, err := spiffeid.FromString(*podSPIFFEID)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, err.Error())
+		fmt.Fprintf(os.Stderr, "%s", err.Error())
 		os.Exit(1)
 	}
 	helper := svid_helper.New(logger, *wlAPISocket, *svidPath, podID)

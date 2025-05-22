@@ -3,7 +3,7 @@ package svid_helper
 import (
 	"context"
 	"fmt"
-	"io/ioutil"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -258,19 +258,19 @@ func checkSVIDFileExist(path string) error {
 func writeResponse(artifact *Artifact, opPath string) error {
 	// Write SVID
 	sfp := filepath.Join(opPath, "svid.pem")
-	if err := ioutil.WriteFile(sfp, artifact.SVID, 0644); err != nil {
+	if err := os.WriteFile(sfp, artifact.SVID, 0644); err != nil {
 		return fmt.Errorf("failed to write SVID to %v: %v", sfp, err)
 	}
 
 	// Write Private Key
 	kfp := filepath.Join(opPath, "svid-key.pem")
-	if err := ioutil.WriteFile(kfp, artifact.PrivateKey, 0400); err != nil {
+	if err := os.WriteFile(kfp, artifact.PrivateKey, 0400); err != nil {
 		return fmt.Errorf("failed to write SVID to %v: %v", kfp, err)
 	}
 
 	// Write Bundle
 	bfp := filepath.Join(opPath, "bundle.pem")
-	if err := ioutil.WriteFile(bfp, artifact.Bundle, 0644); err != nil {
+	if err := os.WriteFile(bfp, artifact.Bundle, 0644); err != nil {
 		return fmt.Errorf("failed to write Bundle to %v: %v", bfp, err)
 	}
 	return nil
