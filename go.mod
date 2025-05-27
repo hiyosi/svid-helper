@@ -7,7 +7,7 @@ require (
 	github.com/spiffe/go-spiffe/v2 v2.5.0
 	github.com/spiffe/spire v1.12.2
 	go.uber.org/zap v1.27.0
-	google.golang.org/grpc v1.72.1
+	google.golang.org/grpc v1.72.2
 )
 
 require (
